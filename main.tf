@@ -1,88 +1,58 @@
 # resource group
 resource "azurerm_resource_group" "az-capabilities-rg" {
-  name     = "az-capabilities-rg"
-  location = "eastus2"
+  name     = var.rg_name
+  location = var.location
 }
 
-# vnet
-resource "azurerm_virtual_network" "az-capabilities-vnet-1" {
-  name = "az-capabilities-vnet-1"
-  location = "eastus2"
-  resource_group_name = "az-capabilities-rg"
-  address_space = ["10.0.0.0/16"]
+# virtual network
+module "network" {
+  source              = "./modules/network"
+  vnet_name           = var.vnet_name
+  address_space       = var.address_space
+  location            = azurerm_resource_group.az-capabilities-rg.location
+  resource_group_name = azurerm_resource_group.az-capabilities-rg.name
+  subnet_name         = "az-capabilities-subnet-1"
+  address_prefixes    = ["10.0.0.0/24"]
 }
 
-#azure container registry
-resource "azurerm_container_registry" "az-capabilities-acr" {
-  name                     = "azcapabilitiesacr"
-  resource_group_name      = "az-capabilities-rg"
-  location                 = "eastus2"
-  admin_enabled            = true
-  sku                      = "Standard"
-  
+# azure container registry
+module "acr" {
+  source              = "./modules/container-registry"
+  acr_name            = var.acr_name
+  location            = azurerm_resource_group.az-capabilities-rg.location
+  resource_group_name = azurerm_resource_group.az-capabilities-rg.name
+  admin_enabled       = var.admin_enabled
+  sku                 = var.sku
 }
 
-# #Push front-end image and push to the containerregistrychupito
-# resource "null_resource" "push_image" {
-#    triggers = {
-#      registry_login_server = azurerm_container_registry.container-registry.login_server
-#    }
+module "acg" {
+  source              = "./modules/container-instance"
+  acg_name            = var.acg_name
+  location            = azurerm_resource_group.az-capabilities-rg.location
+  resource_group_name = azurerm_resource_group.az-capabilities-rg.name
+  ip_address_type     = var.ip_address_type
+  os_type             = var.os_type
+  acr_login_server    = module.acr.acr_login_server
+  acr_admin_username  = module.acr.acr_admin_username
+  acr_admin_password  = module.acr.acr_admin_password
+  aci_name            = var.aci_name
+  image               = "${module.acr.acr_login_server}/fe-chupito:prueba"
+  cpu                 = var.cpu
+  memory              = var.memory
+  port                = var.port
+  protocol            = var.protocol
+  network_profile_id  = module.network.network_profile_id
+}
 
-#    provisioner "local-exec" {
-#      command = "az acr login --name containerregistrychupito"
-#    }
+# load balancer
+module "load_balancer" {
+  source                = "./modules/load-balancer"
+  resource_group_name   = azurerm_resource_group.az-capabilities-rg.name
+  vnet_id               = module.network.vnet_id
+  ip_address_backend_lb = module.acg.ip_address
+  public_ip_address_id  = module.network.public_ip_id
+}
 
-#   provisioner "local-exec" {
-#      command = "docker tag fe-chupito:v5 containerregistrychupito.azurecr.io/fe-chupito:v5"
-#    }
-
-#    provisioner "local-exec" {
-#      command = "docker push containerregistrychupito.azurecr.io/fe-chupito:v5"
-#    }
-#   }
-
-#Push any image and push to the containerregistrychupito
-resource "null_resource" "push_image" {
-   triggers = {
-     registry_login_server = azurerm_container_registry.az-capabilities-acr.login_server
-   }
-
-   provisioner "local-exec" {
-     command = "az acr login --name azcapabilitiesacr"
-   }
-
-  provisioner "local-exec" {
-     command = "docker tag kodekloud/simple-webapp:latest azcapabilitiesacr.azurecr.io/simple-app:prueba"
-   }
-
-   provisioner "local-exec" {
-     command = "docker push azcapabilitiesacr.azurecr.io/simple-app:prueba"
-   }
-  }
-
-#azure container instance - fronted
-resource "azurerm_container_group" "az-capabilties-aci" {
- name                = "az-capabilties-acg"
- location            = "eastus2"
- resource_group_name = "az-capabilities-rg"
- ip_address_type     = "Public"
- os_type = "Linux"
-    
-    image_registry_credential {
-      server = "azcapabilitiesacr.azurecr.io"
-      username = "azcapabilitiesacr"
-      password = "LekZfSMp0HoO9XqLC0KFta2DejNDDe4xNQyuW2fm4X+ACRBTooXV"
-    }
-
-  container {
-    name   = "az-capabilties-container"
-    image  = "azcapabilitiesacr.azurecr.io/simple-app:prueba"
-    cpu    = 1
-    memory = 1
-  
-    ports {
-      port     = 8080
-      protocol = "TCP"
-    }
-  }
+output "ip_adress" {
+  value = module.acg.ip_address
 }
